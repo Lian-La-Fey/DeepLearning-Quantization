@@ -53,3 +53,32 @@ This shows that `BF16` offers a significant reduction in memory without a large 
 - **Memory Efficiency**: `BF16` models use significantly less memory than `FP32` models (about half), making them highly efficient for deployment.
 - **Numerical Accuracy**: While `BF16` introduces a slight precision loss compared to `FP32`, the difference in logits and predictions is negligible, making it a viable option for large-scale model deployment.
 - **FP16 Caution**: Using `FP16` precision on CPUs can result in unsupported operation errors (e.g., for convolution), which is why it is primarily suited for GPU-based models.
+
+## Linear Quantization
+
+Linear Quantization is a technique used in deep learning to reduce the precision of the model's weights and activations, effectively compressing the model size and speeding up inference, especially on hardware with limited resources. The idea is to map high-precision floating-point numbers (e.g., 32-bit) to lower-precision numbers (e.g., 8-bit integers) while maintaining reasonable accuracy.
+
+Consider a weight value from the original floating-point space, which lies in the range $[x_{min}, x_{max}]$.
+
+We want to quantize this into k-bit integer values, say $q \in{\{0, 1, 2, ..., 2^k - 1\}}$
+
+The quantization process consists of two steps:
+- The real number x is scaled to fit the range of integers.
+  $$
+  s = \frac{x_{\text{max}} - x_{\text{min}}}{2^k - 1}
+  $$
+  where $s$ is the scaling factor that relates the floating-point range to the quantized integer range.
+
+- The floating-point value is mapped to an integer:
+  $$
+  q = \left\lfloor \frac{x - x_{\min}}{s} \right\rceil
+  $$
+
+  where $\left\lfloor \cdot \right\rceil$ denotes rounding to the nearest integer.
+
+Dequantization: During inference, the quantized values can be converted back to approximate floating-point values:
+$$
+x_{\text{dequantized}} = s \cdot q + x_{\min}
+$$
+
+Linear quantization was performed on the `google/flan-t5-small` model using the `optimum.quanto` package. The model size was reduced from `307.84 MB` to `126.83 MB`. No change was observed in the model output. However, the quantised model was slower in inference.
