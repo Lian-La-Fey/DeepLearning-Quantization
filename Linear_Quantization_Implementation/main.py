@@ -14,8 +14,11 @@ def get_scale_and_zero_point(tensor: torch.Tensor, dtype: torch.dtype):
     scale = (r_max - r_min) / (q_max - q_min)
     zero_point = int(round(q_min - (r_min / scale)))
     
-    if zero_point < q_min or zero_point > q_max:
+    if zero_point < q_min:
         zero_point = q_min
+    
+    if zero_point > q_max:
+        zero_point = q_max
     
     return scale, zero_point
 
@@ -39,9 +42,32 @@ def get_per_channel_scales(tensor: torch.Tensor, dim, dtype: torch.dtype = torch
     zero_points = zero_points.view(scales_shape)
     
     return scales, zero_points
+
+def get_per_group_scales(tensor: torch.Tensor, dim: int, group_size: int, dtype: torch.dtype = torch.int8):
+    tensor_shape = tensor.shape
+    assert tensor_shape[dim] % group_size == 0
+    assert tensor.dim() == 2
     
-def linear_quantization(tensor: torch.Tensor, scale, zero_point, dtype: torch.dtype):
-    scaled_and_shifted_tensor = tensor / scale + zero_point
+    num_groups = tensor_shape[0] * tensor_shape[1] // group_size
+    scales = torch.zeros(num_groups)
+    zero_points = torch.zeros(num_groups)
+    
+    tensor = tensor.view(-1, group_size)
+    for i in range(num_groups):
+        scales[i] = get_scale(tensor.select(dim, i), dtype=dtype)[0]
+    
+    scales = scales.reshape(-1, 1)
+    zero_points = zero_points.reshape(-1, 1)
+    
+    return scales, zero_points
+    
+def linear_quantization(tensor: torch.Tensor, scale, zero_point, dtype: torch.dtype, group_size: int = 0):
+    if group_size != 0:
+        scaled_and_shifted_tensor = tensor.reshape(-1, group_size) / scale + zero_point
+        scaled_and_shifted_tensor = scaled_and_shifted_tensor.reshape(tensor.shape)
+    else:
+        scaled_and_shifted_tensor = tensor / scale + zero_point
+    
     rounded_tensor = torch.round(scaled_and_shifted_tensor)
     
     q_min = torch.iinfo(dtype).min
@@ -51,7 +77,9 @@ def linear_quantization(tensor: torch.Tensor, scale, zero_point, dtype: torch.dt
     
     return q_tensor
 
-def linear_dequantization(q_tensor, scale, zero_point):
+def linear_dequantization(q_tensor: torch.Tensor, scale, zero_point, group_size: int = 0):
+    if group_size != 0:
+        return (q_tensor.reshape(-1, group_size) * scale - zero_point).reshape(q_tensor.shape)
     return scale * (q_tensor.float() - zero_point)
 
 def plot_matrices(tensor, q_tensor, deq_tensor, err_tensor, name):
@@ -73,37 +101,31 @@ def main():
     parser.add_argument(
         "--quant_type", 
         default="asymmetric",
-        choices=["asymmetric", "symmetric", "per_channel"],
+        choices=["asymmetric", "symmetric", "per_channel", "per_group"],
         type=str
     )
-    parser.add_argument(
-        "--dim", 
-        default=0,
-        choices=[0, 1], 
-        type=int
-    )
+    parser.add_argument("--dim", default=0, choices=[0, 1], type=int)
+    parser.add_argument("--group_size", default=0, type=int)
+    parser.add_argument("--seed", default=42, type=int)
     args = parser.parse_args()
     
-    # tensor = torch.randn((4, 4))
-    tensor = torch.tensor([
-        [224.3, 112.4, -28.6, 53.9],
-        [456.2, 110, 15.5, -29.6],
-        [114.4, 256.3, 127.3, -99.4],
-        [-24.3, 54.3, 65.8, 48.6]
-    ])
+    torch.manual_seed(args.seed)
+    tensor = torch.randn((6, 6))
     print(f"Tensor:\n{tensor}")
     
     if args.quant_type == "asymmetric":
         scale, zero_point = get_scale_and_zero_point(tensor, torch.int8)
     elif args.quant_type == "symmetric":
         scale, zero_point = get_scale(tensor, torch.int8)
-    else:
+    elif args.quant_type == "per_channel":
         scale, zero_point = get_per_channel_scales(tensor, dim=args.dim)
+    else:
+        scale, zero_point = get_per_group_scales(tensor, dim=args.dim, group_size=args.group_size)
     
-    q_tensor = linear_quantization(tensor, scale, zero_point, torch.int8)
+    q_tensor = linear_quantization(tensor, scale, zero_point, torch.int8, group_size=args.group_size)
     print(f"\nQuantized Tensor:\n{q_tensor}")
 
-    deq_tensor = linear_dequantization(q_tensor, scale, zero_point)
+    deq_tensor = linear_dequantization(q_tensor, scale, zero_point, group_size=args.group_size)
     print(f"\nDequantized Tensor:\n{deq_tensor}")
 
     err_tensor = abs(tensor - deq_tensor)
