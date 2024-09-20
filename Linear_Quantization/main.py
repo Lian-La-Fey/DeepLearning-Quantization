@@ -1,6 +1,7 @@
 import torch
 import warnings
 import re
+import time
 
 from collections import defaultdict
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -53,11 +54,17 @@ print(f"The model size is {compute_module_sizes(model)[''] * 1e-6:.2f} MBs")
 input_text = "Turkey is located in "
 input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to("cuda")
 
+start_time = time.time()
 outputs = model.generate(input_ids)
+end_time = time.time()
+print(f"Inference time for the original model: {end_time - start_time:.3f} seconds")
 print(tokenizer.decode(outputs[0]))
 
 qmodel = QuantizedTransformersModel.quantize(model, weights=qint8, activations=None)
-print(f"The model size is {compute_module_sizes(qmodel)[''] * 1e-6:.2f} MBs")
+print(f"\nThe quantized model size is {compute_module_sizes(qmodel)[''] * 1e-6:.2f} MBs")
 
+start_time = time.time()
 outputs = qmodel.generate(input_ids)
+end_time = time.time()
 print(tokenizer.decode(outputs[0]))
+print(f"Inference time for the quantized model: {end_time - start_time:.3f} seconds")

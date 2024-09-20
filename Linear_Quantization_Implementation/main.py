@@ -24,7 +24,7 @@ def get_scale_and_zero_point(tensor: torch.Tensor, dtype: torch.dtype):
 
 # Symmetric Quantization Function
 def get_scale(tensor: torch.Tensor, dtype: torch.dtype):
-    r_max = tensor.max().item()
+    r_max = tensor.abs().max().item()
     q_max = torch.iinfo(dtype).max
     return r_max / q_max, 0
 
@@ -82,13 +82,24 @@ def linear_dequantization(q_tensor: torch.Tensor, scale, zero_point, group_size:
         return (q_tensor.reshape(-1, group_size) * scale - zero_point).reshape(q_tensor.shape)
     return scale * (q_tensor.float() - zero_point)
 
-def plot_matrices(tensor, q_tensor, deq_tensor, err_tensor, name):
+def plot_matrices(tensor: torch.Tensor, q_tensor, deq_tensor, err_tensor, name):
     fig, axs = plt.subplots(1, 4, figsize=(16, 5))
     matrices = [tensor, q_tensor, deq_tensor, err_tensor]
     titles = ["Original Tensor", "Quantized Tensor", "Dequantized Tensor", "Error Tensor"]
 
     for i, (ax, matrix, title) in enumerate(zip(axs, matrices, titles)):
-        sns.heatmap(matrix.numpy(), annot=True, fmt=".2f", cmap='viridis', ax=ax, cbar=False, square=True)
+        if i == 1:
+            fmt: str = ".0f"
+            vmin, vmax = q_tensor.min(), q_tensor.max()
+        else:
+            vmin, vmax = tensor.min(), tensor.max()
+            fmt: str = ".2f"
+        
+        sns.heatmap(
+            matrix.numpy(), annot=True, fmt=fmt, 
+            cmap='inferno', ax=ax, cbar=False, square=True,
+            vmin=vmin, vmax=vmax
+        )
         ax.set_title(title)
         ax.axis('off')
 
@@ -97,7 +108,7 @@ def plot_matrices(tensor, q_tensor, deq_tensor, err_tensor, name):
     plt.show()
 
 def main():
-    parser = argparse.ArgumentParser(description="Choose between asymmetric and symmetric quantization.")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         "--quant_type", 
         default="asymmetric",
@@ -120,6 +131,9 @@ def main():
     elif args.quant_type == "per_channel":
         scale, zero_point = get_per_channel_scales(tensor, dim=args.dim)
     else:
+        if args.group_size <= 0:
+            raise ValueError("Group size must be greater than 0 for per_group quantization.")
+        
         scale, zero_point = get_per_group_scales(tensor, dim=args.dim, group_size=args.group_size)
     
     q_tensor = linear_quantization(tensor, scale, zero_point, torch.int8, group_size=args.group_size)
@@ -129,8 +143,11 @@ def main():
     print(f"\nDequantized Tensor:\n{deq_tensor}")
 
     err_tensor = abs(tensor - deq_tensor)
+    rel_err_tensor = err_tensor / (torch.abs(tensor) + 1e-8)
+    
     print(f"\nMean Absolute Quantization Error: {err_tensor.mean()}")
     print(f"Mean Squared Quantization Error: {err_tensor.square().mean()}")
+    print(f"Mean Relative Quantization Error: {rel_err_tensor.mean()}")
     print(f"\nQuantization Error:\n{err_tensor}")
     
     plot_matrices(tensor, q_tensor, deq_tensor, err_tensor, args.quant_type)
