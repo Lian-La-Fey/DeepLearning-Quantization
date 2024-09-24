@@ -80,16 +80,16 @@ The quantization process consists of three steps:
   $$\text{scale} = \frac{r_\text{max} - r_\text{min}}{q_\text{max} - q_\text{min}}$$
 
 - Calculate the zero point:
-  $$\text{zero\_point} = \text{round}\left(q_\text{min} - \frac{r_\text{min}}{\text{scale}}\right)$$
+  $$\text{zero-point} = \text{round}\left(q_\text{min} - \frac{r_\text{min}}{\text{scale}}\right)$$
   
   The scale determines how to scale floating-point numbers into integer values, while the zero-point shifts the floating-point values so that the integer representation is correctly aligned.
 
 - The floating-point value is mapped to an integer:
-  $$q_x = \left\lfloor \text{round}(\frac{r_x}{\text{scale}} + \text{zero\_point})\right\rceil$$
+  $$q_x = \left\lfloor \text{round}(\frac{r_x}{\text{scale}} + \text{zero-point})\right\rceil$$
   where $\left\lfloor \cdot \right\rceil$ denotes rounding to the nearest integer.
 
 Dequantization: During inference, the quantized values can be converted back to approximate floating-point values:
-$$x_{\text{dequantized}} = \text{scale} \ \times \ (q_x - \text{zero\_point})$$
+$$x_{\text{dequantized}} = \text{scale} \ \times \ (q_x - \text{zero-point})$$
 
 What has been explained so far is related to the `asymmetric` mode of linear quantization. In `asymmetric` mode, the exact minimum and maximum values of the float range are mapped. In the other mode, `symmetric` mode, the `maximum absolute value` is chosen and zero point is not used or taken as zero.
 
@@ -100,7 +100,7 @@ Symmetric Quantization Steps:
 - Calculate the scale:
   $$\text{scale} = \frac{\text{max}(|r|)}{q_{max}}$$
 
-- Zero point: $$\text{zero\_point} = 0$$
+- Zero point: $$\text{zero-point} = 0$$
 - Mapping floating-point value to integer:
   $$q_x = \left\lfloor \text{round}(\frac{r_x}{\text{scale}})\right\rceil$$
 
@@ -240,4 +240,4 @@ packed = high_bits | low_bits           # [[0101 1001, 0001 1010]] == [[89, 26]]
 ### Results
 ![4-Bit Packing](Images/image05.png)
 
-Packed 4-bit integer quantisation effectively reduces model size while maintaining performance most of the time. Inference speed is slowed due to the overhead of packing and unpacking operations.In addition, the inability to perform matrix multiplications over integer numbers, as they are not supported by torch.cuda, may also mislead on inference speed.
+Packed 4-bit integer quantisation effectively reduces model size while maintaining performance most of the time. Inference speed is slowed due to the overhead of packing and unpacking operations. In addition, the inability to perform matrix multiplications over integer numbers, as they are not supported by torch.cuda, may also mislead on inference speed.
