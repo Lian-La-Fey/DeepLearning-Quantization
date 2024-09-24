@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,14 +9,14 @@ class QuantizedLinearLayer(nn.Module):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.quantized_weights = nn.Parameter(
-            torch.randint(-128, 127, (out_features, in_features), dtype=torch.int8), 
+            torch.zeros((out_features, in_features), dtype=torch.int8), 
             requires_grad=False
         )
         self.scales = nn.Parameter(torch.randn(out_features), requires_grad=False)
-        self.bias = nn.Parameter(torch.randn(out_features), requires_grad=True) if bias else None
+        self.bias = nn.Parameter(torch.randn(out_features), requires_grad=False) if bias else None
     
     def quantize_per_channel(self, weights: torch.Tensor):
-        max_vals = torch.abs(weights).max(dim=1, keepdim=True).values
+        max_vals = weights.abs().max(dim=1, keepdim=True).values
         self.scales.data = max_vals / 127
         quantized_weights = torch.round(weights / self.scales).clamp(-128, 127).to(torch.int8)
         self.quantized_weights.data = quantized_weights
@@ -23,12 +24,12 @@ class QuantizedLinearLayer(nn.Module):
     def forward(self, x: torch.Tensor):
         device = x.device
         dtype = x.dtype
-        dequantized_weight = self.quantized_weights.to(device).to(dtype) * self.scales.to(device).view(-1, 1).to(dtype)
-        
+        weight = self.quantized_weights.to(device=device, dtype=dtype)
+        output = F.linear(x, weight) * self.scales.to(device=device, dtype=dtype).view(1, -1)
         if self.bias is not None:
-            bias = self.bias.to(device).to(dtype)
-            return F.linear(x, dequantized_weight, bias)
-        return F.linear(x, dequantized_weight)
+            bias = self.bias.to(device=device, dtype=dtype)
+            output = output + bias
+        return output
 
 def replace_linear_with_quantized(module: nn.Module, exclude: list):
     for name, child in module.named_children():
@@ -42,19 +43,33 @@ def replace_linear_with_quantized(module: nn.Module, exclude: list):
         else:
             replace_linear_with_quantized(child, exclude=exclude)
 
-model_id = "facebook/opt-125m"
-model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda")
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+def generate_text(model, tokenizer, input_text, max_new_tokens=20, device="cpu"):
+    input_ids = tokenizer.encode(input_text, return_tensors='pt').to(device)
+    output = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=True)
+    generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+    return generated_text
 
-print(f"Model:\n{model}")
-print(f"Footprint of the model is: {model.get_memory_footprint() * 1e-6:.2f} MBs.")
-print(pipe("What have you prepared for breakfast?", max_new_tokens=20, do_sample=True)[0]['generated_text'])
+device = "cuda"
+model_id = "facebook/opt-350m"
+model = AutoModelForCausalLM.from_pretrained(model_id).to(device)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+# print(f"Model:\n{model}")
+print(f"Footprint of the model is: {model.get_memory_footprint() * 1e-9:.2f} GBs.")
+text = "What have you prepared for breakfast?"
+start_time = time.time()
+gen_text = generate_text(model, tokenizer, text, max_new_tokens=20, device=device)
+end_time = time.time()
+print(f"Inference time for the original model: {end_time - start_time:.3f} seconds")
+print(gen_text, end='\n\n')
+
 
 replace_linear_with_quantized(model, exclude=["lm_head"])
 
-print(f"\nQuantized Model:\n{model}")
-print(f"Footprint of the model is: {model.get_memory_footprint() * 1e-6:.2f} MBs.\n")
-
-pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-print(pipe("What have you prepared for breakfast?", max_new_tokens=20, do_sample=True)[0]['generated_text'])
+# print(f"Quantized Model:\n{model}")
+print(f"Footprint of the model is: {model.get_memory_footprint() * 1e-9:.2f} GBs.")
+start_time = time.time()
+gen_text = generate_text(model, tokenizer, text, max_new_tokens=20, device=device)
+end_time = time.time()
+print(f"Inference time for the custom quantized model: {end_time - start_time:.3f} seconds")
+print(gen_text)

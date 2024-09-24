@@ -167,3 +167,77 @@ The quantized model size is 126.83 MBs
 Inference time for the quantized model: 0.770 seconds
 ```
 
+## Custom Linear Layer Quantizer
+
+It provides a way to reduce the model memory footprint and speed up inference by applying a special linear layer quantisation that replaces the `nn.Linear` layers with `QuantizedLinearLayer`.
+
+### QuantizedLinearLayer Class:    
+- The  `QuantizedLinearLayer` replaces the float weights of a linear layer with quantized `int8` values.
+- It introduces two parameters: `quantized_weights` and `scales`.    
+- The method `quantize_per_channel()` is applied to quantize the weights channel-wise, which ensures with varying value distributions across channels. 
+
+### Model Transformation:
+- The function `replace_linear_with_quantized()` recursively traverses the model, replacing `nn.Linear` layers with the custom `QuantizedLinearLayer` where necessary. 
+- An optional exclude parameter is provided to leave certain layers unquantized (e.g., the final output layer in a language model like `lm_head`).
+
+### Results
+```
+Footprint of the model is: 1.32 GBs.
+Inference time for the original model: 10.025 seconds
+What have you prepared for breakfast?
+
+The day ahead is no laughing matter, but if you're looking to prepare breakfast properly,
+
+Footprint of the model is: 0.42 GBs.
+Inference time for the custom quantized model: 1.360 seconds
+What have you prepared for breakfast?
+I prepare a light breakfast that contains oats, cereal and almond milk. If I'm a bit
+```
+
+The model's memory footprint significantly decreased from 1.32 GB to 0.42 GB, while inference time improved from 10.025 seconds to just 1.360 seconds. The quantised model's answers were also often relevant to the question asked. A disadvantage of this custom linear layer quantizer is that it does not use quantized integers in matrix multiplications since the manual torch quantization operations is limited.
+
+## 4-Bit Integer Quantization with Packing
+
+It is a more aggressive quantization technique using 4-bit integers, which aims to reduce the model size even further compared to traditional 8-bit quantization. Since 4-bit storage is not supported, it is implemented by packing two 4-bit integers into a single byte.
+
+### Packing
+
+The weights of linear layers are packed into a single byte by combining two 4-bit integers. Each weight is first quantized to the range of -8 to 7, which is then transformed into a 4-bit representation.
+
+```python
+def pack_weights(self, tensor: torch.Tensor):
+    assert tensor.dtype == torch.int8
+    tensor = tensor + 8
+    high_bits = tensor[:, ::2] << 4
+    low_bits = tensor[:, 1::2]
+    packed = high_bits | low_bits
+    return packed
+```
+
+The `pack_weights` method takes an input tensor of int8 values, adjusts them to be non-negative, and then separates them into high and low bits. The high bits are shifted left by 4, and the low bits are combined using a bitwise OR operation, resulting in a packed representation.
+
+Let's consider a quantized simple tensor:
+```python
+tensor = [[-3, 1, -7, 2]]
+```
+
+First, we adjust the values to fit within the range [0-15]:
+```python
+tensor = [[5, 9, 1, 10]] # [[0000 0101, 0000 1001, 0000 0001, 0000 1010]]
+```
+
+Next, we extract high and low bit pairs:
+```python
+high_bits = (tensor[:, ::2] & 0xF) << 4 # [[0101 0000, 0001 0000]]
+low_bits = tensor[:, 1::2] & 0xF        # [[0000 1001, 0000 1010]]
+```
+
+Lastly, we pack them into single byte:
+```python
+packed = high_bits | low_bits           # [[0101 1001, 0001 1010]] == [[89, 26]]
+```
+
+### Results
+![4-Bit Packing](Images/image05.png)
+
+Packed 4-bit integer quantisation effectively reduces model size while maintaining performance most of the time. Inference speed is slowed due to the overhead of packing and unpacking operations.In addition, the inability to perform matrix multiplications over integer numbers, as they are not supported by torch.cuda, may also mislead on inference speed.
